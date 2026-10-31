@@ -953,7 +953,8 @@ pub fn layout_of(pane: &str) -> Value {
     res.get("layout").cloned().unwrap_or(Value::Null)
 }
 
-/// The split of which a pane is a whole side: left when the pane is its left part. A pane's width includes its border.
+/// The split of which a pane, or the column it is stacked in, is a whole side: left when the pane is in its left part.
+/// A pane's width includes its border; its column has the same width.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Found {
     /// The pane's width.
@@ -972,14 +973,29 @@ fn num(v: &Value, path: &[&str]) -> f64 {
     crate::json::num(at)
 }
 
+/// The split of which the pane's column is a whole side: panes stacked above or below it (splits `down` of the same x
+/// and width, nested or not) make the pane shorter than the split `right` of which the column is a side. Unlike the JS of
+/// 0.8.0, which matched the pane's own height: a pane stacked in the explorer's column (another plugin's pane) left it
+/// without a split, which stopped the width keeper, < >, the widths put back, the share beside the preview and
+/// settle_preview.
 pub fn side_split(layout: &Value, pane: &str) -> Option<Found> {
     let panes = layout.get("panes")?.as_array()?;
     let me = panes.iter().find(|p| p.get("pane_id").and_then(Value::as_str) == Some(pane))?;
-    let (x, y, w, h) =
-        (num(me, &["rect", "x"]), num(me, &["rect", "y"]), num(me, &["rect", "width"]), num(me, &["rect", "height"]));
-    for s in layout.get("splits")?.as_array()? {
-        let (sx, sy, sw, sh) =
-            (num(s, &["rect", "x"]), num(s, &["rect", "y"]), num(s, &["rect", "width"]), num(s, &["rect", "height"]));
+    let splits = layout.get("splits")?.as_array()?;
+    let rect = |v: &Value| {
+        (num(v, &["rect", "x"]), num(v, &["rect", "y"]), num(v, &["rect", "width"]), num(v, &["rect", "height"]))
+    };
+    let (x, mut y, w, mut h) = rect(me);
+    // The column: the tallest split `down` of the same x and width that holds the pane. Each one that holds it holds
+    // the smaller ones too, so the order of the splits does not matter.
+    for s in splits.iter().filter(|s| s.get("direction").and_then(Value::as_str) == Some("down")) {
+        let (sx, sy, sw, sh) = rect(s);
+        if sx == x && sw == w && sh > h && sy <= y && sy + sh >= y + h {
+            (y, h) = (sy, sh);
+        }
+    }
+    for s in splits {
+        let (sx, sy, sw, sh) = rect(s);
         let ratio = num(s, &["ratio"]);
         if s.get("direction").and_then(Value::as_str) != Some("right") || sy != y || sh != h {
             continue;
@@ -1537,11 +1553,141 @@ pub fn discard(abs: &str, root: &str) -> String {
     }
 }
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
 mod tests {
     use super::*;
 
+    fn pane(id: &str, x: u32, y: u32, w: u32, h: u32) -> String {
+        format!(r#"{{"pane_id":"{id}","rect":{{"x":{x},"y":{y},"width":{w},"height":{h}}}}}"#)
+    }
+
+    fn split(dir: &str, ratio: f64, x: u32, y: u32, w: u32, h: u32) -> String {
+        format!(r#"{{"direction":"{dir}","ratio":{ratio},"rect":{{"x":{x},"y":{y},"width":{w},"height":{h}}}}}"#)
+    }
+
+    fn layout(panes: &[String], splits: &[String]) -> Value {
+        crate::json::parse(&format!(r#"{{"panes":[{}],"splits":[{}]}}"#, panes.join(","), splits.join(","))).unwrap()
+    }
+
+    fn found(width: f64, split_width: f64, ratio: f64, left: bool) -> Option<Found> {
+        Some(Found { width, split_width, ratio, left })
+    }
+
+    #[test]
+    fn a_pane_alone_in_its_column_is_a_side_of_its_split() {
+        let lay = layout(
+            &[pane("w1:pC", 0, 0, 38, 60), pane("w1:p1", 38, 0, 164, 60)],
+            &[split("right", 0.19, 0, 0, 202, 60)],
+        );
+        assert_eq!(side_split(&lay, "w1:pC"), found(38.0, 202.0, 0.19, true));
+        assert_eq!(side_split(&lay, "w1:p1"), found(164.0, 202.0, 0.19, false));
+        assert_eq!(side_split(&lay, "w1:p9"), None);
+    }
+
+    #[test]
+    fn the_explorer_under_a_stacked_pane_keeps_its_split_on_the_right() {
+        // imsike.menu's Tools pane above the explorer, docked on the right.
+        let lay = layout(
+            &[pane("w4:p1", 0, 0, 164, 60), pane("w4:pD", 164, 0, 38, 6), pane("w4:pC", 164, 6, 38, 54)],
+            &[split("right", 0.81, 0, 0, 202, 60), split("down", 0.10, 164, 0, 38, 60)],
+        );
+        assert_eq!(side_split(&lay, "w4:pC"), found(38.0, 202.0, 0.81, false));
+        assert_eq!(side_split(&lay, "w4:pD"), found(38.0, 202.0, 0.81, false));
+        assert_eq!(side_split(&lay, "w4:p1"), found(164.0, 202.0, 0.81, true));
+    }
+
+    #[test]
+    fn the_explorer_under_a_stacked_pane_keeps_its_split_on_the_left() {
+        let lay = layout(
+            &[pane("w4:pD", 0, 0, 38, 6), pane("w4:pC", 0, 6, 38, 54), pane("w4:p1", 38, 0, 164, 60)],
+            &[split("right", 0.19, 0, 0, 202, 60), split("down", 0.10, 0, 0, 38, 60)],
+        );
+        assert_eq!(side_split(&lay, "w4:pC"), found(38.0, 202.0, 0.19, true));
+    }
+
+    #[test]
+    fn two_panes_stacked_in_the_column_keep_its_split() {
+        // Nested stacks: one pane above the explorer, one below it; the outer split listed last, then first.
+        let panes = [
+            pane("w4:p1", 0, 0, 164, 60),
+            pane("w4:pD", 164, 0, 38, 6),
+            pane("w4:pC", 164, 6, 38, 44),
+            pane("w4:pE", 164, 50, 38, 10),
+        ];
+        let mut splits = vec![
+            split("right", 0.81, 0, 0, 202, 60),
+            split("down", 0.81, 164, 6, 38, 54),
+            split("down", 0.10, 164, 0, 38, 60),
+        ];
+        for _ in 0..2 {
+            let lay = layout(&panes, &splits);
+            assert_eq!(side_split(&lay, "w4:pC"), found(38.0, 202.0, 0.81, false));
+            assert_eq!(side_split(&lay, "w4:pE"), found(38.0, 202.0, 0.81, false));
+            splits.reverse();
+        }
+    }
+
+    #[test]
+    fn a_stacked_column_in_a_nested_split_keeps_that_split() {
+        // A | (B | (Tools / explorer)): the split that holds the column does not span the tab.
+        let lay = layout(
+            &[
+                pane("w1:pA", 0, 0, 100, 60),
+                pane("w1:pB", 100, 0, 62, 60),
+                pane("w1:pD", 162, 0, 40, 6),
+                pane("w1:pC", 162, 6, 40, 54),
+            ],
+            &[
+                split("right", 0.5, 0, 0, 202, 60),
+                split("right", 0.61, 100, 0, 102, 60),
+                split("down", 0.1, 162, 0, 40, 60),
+            ],
+        );
+        assert_eq!(side_split(&lay, "w1:pC"), found(40.0, 102.0, 0.61, false));
+    }
+
+    #[test]
+    fn a_stacked_column_spanning_the_tab_is_no_side() {
+        let lay =
+            layout(&[pane("w1:pD", 0, 0, 202, 6), pane("w1:pC", 0, 6, 202, 54)], &[split("down", 0.1, 0, 0, 202, 60)]);
+        assert_eq!(side_split(&lay, "w1:pC"), None);
+    }
+
+    #[test]
+    fn a_row_under_a_wider_pane_has_its_own_split() {
+        // The explorer under a terminal spanning the tab: the split of its row, as before; the wide pane is no side.
+        let lay = layout(
+            &[pane("w1:p1", 0, 0, 202, 20), pane("w1:pC", 0, 20, 38, 40), pane("w1:p2", 38, 20, 164, 40)],
+            &[split("down", 0.33, 0, 0, 202, 60), split("right", 0.19, 0, 20, 202, 40)],
+        );
+        assert_eq!(side_split(&lay, "w1:pC"), found(38.0, 202.0, 0.19, true));
+        assert_eq!(side_split(&lay, "w1:p1"), None);
+    }
+
+    #[test]
+    fn a_stack_of_the_same_width_in_another_row_is_not_the_column() {
+        // The explorer in the lower row, under a stack of its width in the upper one: the split of its own row.
+        let lay = layout(
+            &[
+                pane("w1:p1", 0, 0, 164, 30),
+                pane("w1:pD", 164, 0, 38, 10),
+                pane("w1:pE", 164, 10, 38, 20),
+                pane("w1:p2", 0, 30, 164, 30),
+                pane("w1:pC", 164, 30, 38, 30),
+            ],
+            &[
+                split("down", 0.5, 0, 0, 202, 60),
+                split("right", 0.81, 0, 0, 202, 30),
+                split("down", 0.33, 164, 0, 38, 30),
+                split("right", 0.812, 0, 30, 202, 30),
+            ],
+        );
+        assert_eq!(side_split(&lay, "w1:pC"), found(38.0, 202.0, 0.812, false));
+        assert_eq!(side_split(&lay, "w1:pE"), found(38.0, 202.0, 0.81, false));
+    }
+
     /// A name typed quoted into sh, and fish when installed, comes out as it is.
+    #[cfg(unix)]
     #[test]
     fn a_quoted_name_reads_back_alike_in_sh_and_fish() {
         for name in ["\\'; echo INJECTED; echo \\'", "a\\b", "it's", "a\\\\'b"] {

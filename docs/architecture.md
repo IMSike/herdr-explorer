@@ -282,8 +282,10 @@ that each line fills the pane exactly, and control characters from names, files 
 
 herdr keeps the ratio of each split, so resizing the window or another pane rescales the explorer and the
 preview. After each resize, `actions::WidthKeeper` sets back the ratio of the split of which the pane is a whole
-side (`side_split`, `herdr pane resize`), at least 10 columns and leaving 20 to the other side. When the pane's own
-split changed ratio (its border dragged), it keeps the new width instead, which the explorer saves in `width`.
+side (`side_split`, `herdr pane resize`), at least 10 columns and leaving 20 to the other side. With panes stacked
+above or below it in its column (another plugin's pane, say: splits `down` of the same x and width), that side is
+the column, and herdr applies the pane's resize to the split that holds the column. When the pane's own split changed
+ratio (its border dragged), it keeps the new width instead, which the explorer saves in `width`.
 `<` and `>` change the width kept; the other kept panes this moves are named in the `resizing` file for 500 ms and
 put back by the same pane, so that they are not moved twice (herdr resizes by a relative amount).
 
