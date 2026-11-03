@@ -297,9 +297,13 @@ fn each_pane_starts_as_the_manifest_runs_it_and_quits_with_code_0() {
         ("diff", &[("EXPLORER_FILE", &file), ("EXPLORER_ROOT", &root)], "a.txt", b"q"),
         ("scm", &[("EXPLORER_ROOT", &root)], "Not a git repository", b"q"),
     ];
+    // Each pane marks itself as the plugin's in the state folder (exec::mark_pane), under its pane id.
+    let mark = s.root.join("state/panes/w1_p2.json");
     for (id, extra, shown, quit) in panes {
+        let _ = std::fs::remove_file(&mark);
         let mut p = s.start(&s.cmd(&["pane", id]), extra);
         p.until(shown);
+        assert!(mark.exists(), "{id} not marked");
         std::thread::sleep(Duration::from_millis(500));
         p.send(quit);
         if id == "tree" {

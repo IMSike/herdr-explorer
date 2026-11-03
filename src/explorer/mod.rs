@@ -773,7 +773,7 @@ impl Explorer {
         let pane = self.pane.clone();
         self.herdr.send(Box::new(move || {
             let panes = actions::tab_of(&pane).map(|t| t.panes).unwrap_or_default();
-            for p in panes.iter().filter(|p| p.get("label").and_then(Value::as_str) == Some("Preview")) {
+            for p in panes.iter().filter(|p| exec::own_labelled(p, "Preview")) {
                 let id = p.get("pane_id").map_or_else(|| "undefined".into(), crate::json::text);
                 exec::run(exec::herdr(), &["pane", "close", &id], &Opts::default());
             }

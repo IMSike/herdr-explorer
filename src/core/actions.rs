@@ -479,10 +479,6 @@ fn label_is(p: &Value, label: &str) -> bool {
     p.get("label").and_then(Value::as_str) == Some(label)
 }
 
-fn own_label(p: &Value) -> bool {
-    p.get("label").and_then(Value::as_str).is_some_and(|l| exec::OWN_PANES.contains(&l))
-}
-
 fn list(v: Value, key: &str) -> Vec<Value> {
     v.get(key).and_then(Value::as_array).cloned().unwrap_or_default()
 }
@@ -646,7 +642,7 @@ fn side_pane(entry: &str, pane: &str, env: &[(&str, &str)]) -> Value {
     }
     for p in &tab.panes {
         let id = str_of(p, "pane_id");
-        if p.get("label").and_then(Value::as_str).is_some_and(|l| SIDE.contains(&l)) && id != target {
+        if id != target && SIDE.iter().any(|l| exec::own_labelled(p, l)) {
             ask(&["pane", "close", &id]);
         }
     }
@@ -751,7 +747,8 @@ pub fn origin_of(pane: &str) -> Option<(String, String)> {
                 .into_iter()
                 .filter(|p| p.get("tab_id") == t.get("tab_id"))
                 .collect();
-            let p = panes.iter().find(|x| label_is(x, "Explorer")).or_else(|| panes.iter().find(|x| !own_label(x)));
+            let p =
+                panes.iter().find(|x| label_is(x, "Explorer")).or_else(|| panes.iter().find(|x| !exec::own_label(x)));
             return p.or(panes.first()).map(|p| (str_of(p, "pane_id"), t_id.clone()));
         }
     }
@@ -817,7 +814,7 @@ pub fn hold_tab(kind: &str, origin: &str, name: &str) {
                 sync(&["tab", "focus", &from]);
             }
             for p in sync(&["pane", "list", "--workspace", &str_of(&me, "workspace_id")])?.get("panes")?.as_array()? {
-                if p.get("tab_id") == me.get("tab_id") && label_is(p, "Preview") {
+                if p.get("tab_id") == me.get("tab_id") && exec::own_labelled(p, "Preview") {
                     sync(&["pane", "close", &str_of(p, "pane_id")])?;
                 }
             }
@@ -867,7 +864,7 @@ pub fn terminal_of(pane: &str) -> (Option<String>, Option<&'static str>) {
                 break;
             };
             let p = ask(&["pane", "get", &target]);
-            if !p.get("pane").is_some_and(own_label) {
+            if !p.get("pane").is_some_and(exec::own_label) {
                 return (Some(target), Some(side));
             }
             from = target;

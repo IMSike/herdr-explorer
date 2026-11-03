@@ -106,7 +106,7 @@ saved, and the explorer's width falls back to 32 columns.
 | `update.json`          | `checkedAt`, the repository checked (`repo`), the `latest` release found with its changes (`notes`) and page (`url`), the version skipped (`skip`), the version the explorers last ran (`seen`), and the last update seen (`updated`: `{ from, to, t }`) |
 | `resizing`             | the pane resizing itself, for half a second: the panes it moves let it put them back         |
 | `setup-offered`        | present once the explorer has offered the [setup](installation.md#setup)                    |
-| `panes/<pane id>.json` | per pane: the explorer's tab folder (`home`) and tree root (`root`), the preview's `file`, `root`, `line` and tabs (`tabs`) |
+| `panes/<pane id>.json` | per pane of the plugin, written when it starts (`{}` for the panes that keep nothing), which tells it apart from a pane the user gave one of its labels: the explorer's tab folder (`home`) and tree root (`root`), the preview's `file`, `root`, `line` and tabs (`tabs`) |
 | `preview-<tab id>.json`| the last file the explorer, the search or `peek` asked the tab's preview to show           |
 | `notes-<tab id>.json`  | the tab's review notes, removed once sent, each with the text of its lines (`anchor`) and `stale` once they are gone |
 | `scope-<tab id>.json`  | the tab's [diff scope](usage/changes.md#diff-scope), `{ kind, rev }`, absent for HEAD                |
