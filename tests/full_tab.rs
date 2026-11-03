@@ -405,6 +405,41 @@ fn a_pane_keeps_its_width_and_takes_the_one_dragged_to() {
     assert_eq!((v.kept, right.left()), (None, None));
 }
 
+/// The explorer (p2) docked on the right in a split of split columns at ratio, under a pane stacked in its column (p6,
+/// 6 rows), as imsike.menu's Tools pane is.
+fn stacked(split: f64, ratio: f64) -> Value {
+    let w = (split * (1.0 - ratio)).round();
+    let x = split - w;
+    json::parse(&format!(
+        r#"{{"area":{{"width":{split}}},"zoomed":false,
+        "panes":[{{"pane_id":"w1:p3","rect":{{"x":0,"y":0,"width":{x},"height":60}}}},
+                 {{"pane_id":"w1:p6","rect":{{"x":{x},"y":0,"width":{w},"height":6}}}},
+                 {{"pane_id":"w1:p2","rect":{{"x":{x},"y":6,"width":{w},"height":54}}}}],
+        "splits":[{{"direction":"right","ratio":{ratio},"rect":{{"x":0,"y":0,"width":{split},"height":60}}}},
+                  {{"direction":"down","ratio":0.1,"rect":{{"x":{x},"y":0,"width":{w},"height":60}}}}]}}"#
+    ))
+    .unwrap()
+}
+
+#[test]
+fn a_pane_stacked_in_the_explorer_column_leaves_it_its_width() {
+    let f = Fake::new();
+    f.reset(&[]);
+    let at = |l: Value| f.answer("pane layout --pane w1:p2", &Value::Obj(vec![("layout".into(), l)]));
+    let mut keeper = WidthKeeper::new("w1:p2", Some("right"));
+    let mut w = Width { columns: 37.0, kept: None };
+    at(stacked(202.0, 0.81));
+    keeper.check(false, &mut w);
+    assert_eq!((w.kept, keeper.left()), (Some(37.0), Some(false)));
+    // The window widened, the split kept its ratio: the column is put back to 37 columns (38 with its border), by
+    // resizing the explorer, which herdr applies to the split that holds its column.
+    at(stacked(240.0, 0.81));
+    w.columns = 45.0;
+    keeper.check(false, &mut w);
+    assert_eq!(w.kept, Some(37.0));
+    assert!(f.called("pane resize --pane w1:p2 --direction right --amount 0.030625"));
+}
+
 #[test]
 fn a_pane_of_its_own_tab_shares_its_width_as_the_settings_say() {
     let f = Fake::new();
