@@ -148,6 +148,17 @@ fn text(b: &[u8]) -> String {
 const CTX: &str = r#"{"workspace_id":"w1","tab_id":"w1:t1","workspace_cwd":"/space"}"#;
 const OPENED: &str = r#"{"plugin_pane":{"pane":{"pane_id":"w1:p9"}}}"#;
 
+/// A shell, the foreground program of a terminal or of a plugin pane that herdr restored as a shell.
+const SHELL: &str = r#"{"process_info":{"foreground_processes":[{"argv":["/bin/bash"]}]}}"#;
+
+/// The state files that mark panes as the plugin's own, named as exec::pane_file names them (':' to '_' for these ids).
+fn mark(f: &Fake, panes: &[&str]) {
+    std::fs::create_dir_all(f.state.join("panes")).unwrap();
+    for p in panes {
+        std::fs::write(f.state.join(format!("panes/{}.json", p.replace(':', "_"))), "{}").unwrap();
+    }
+}
+
 #[test]
 fn the_state_folder_is_saved_for_peek_and_herdr_missing_ends_quietly() {
     let mut f = Fake::new("hook-state");
@@ -223,6 +234,7 @@ fn toggle_closes_the_explorer_and_its_preview() {
     let mut f = Fake::new("hook-close");
     f.set("HERDR_PLUGIN_CONTEXT_JSON", CTX);
     f.tab(&[("w1:p2", Some("Explorer")), ("w1:p1", None), ("w1:p5", Some("Preview"))]);
+    mark(&f, &["w1:p2", "w1:p5"]);
     f.answer("pane close w1:p5", "{}");
     f.answer("pane close w1:p2", "{}");
     let out = f.run("hook", &["--toggle"]);
@@ -240,6 +252,45 @@ fn toggle_closes_the_explorer_and_its_preview() {
     f.set("HERDR_PLUGIN_CONTEXT_JSON", "{}");
     assert_eq!(f.run("hook", &["--toggle"]).status.code(), Some(0));
     assert_eq!(f.calls().len(), 1);
+}
+
+#[test]
+fn toggle_leaves_the_panes_renamed_with_a_plugin_label() {
+    // A terminal and an agent renamed Preview beside the explorer and its preview: only the plugin's two close. The
+    // agent runs node, as those installed with npm do, which is not taken for a pane of a 0.x release here.
+    let mut f = Fake::new("hook-renamed");
+    f.set("HERDR_PLUGIN_CONTEXT_JSON", CTX);
+    f.tab(&[
+        ("w1:p6", Some("Preview")),
+        ("w1:p8", Some("Preview")),
+        ("w1:p2", Some("Explorer")),
+        ("w1:p1", None),
+        ("w1:p5", Some("Preview")),
+    ]);
+    mark(&f, &["w1:p2", "w1:p5"]);
+    f.answer("pane process-info --pane w1:p6", SHELL);
+    f.answer(
+        "pane process-info --pane w1:p8",
+        r#"{"process_info":{"foreground_processes":[{"argv":["node","/usr/local/bin/claude"]}]}}"#,
+    );
+    let out = f.run("hook", &["--toggle"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
+    let closed: Vec<String> = f.calls().into_iter().filter(|c| c.starts_with("pane close")).collect();
+    assert_eq!(closed, ["pane close w1:p5", "pane close w1:p2"]);
+
+    // A terminal renamed Explorer, with no explorer in the tab: the explorer opens, the terminal stays.
+    let mut f = Fake::new("hook-renamed-open");
+    f.set("HERDR_PLUGIN_CONTEXT_JSON", CTX);
+    f.tab(&[("w1:p1", Some("Explorer")), ("w1:p7", None)]);
+    f.answer("pane process-info --pane w1:p1", SHELL);
+    f.layout("w1:p1");
+    let open = "plugin pane open --plugin gcaudan.explorer --entrypoint tree --placement split --target-pane w1:p1 --direction right --env EXPLORER_ROOT=/space --no-focus";
+    f.answer(open, OPENED);
+    let out = f.run("hook", &["--toggle"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
+    let calls = f.calls();
+    assert!(calls.contains(&open.to_string()), "{calls:?}");
+    assert!(!calls.iter().any(|c| c.starts_with("pane close")), "{calls:?}");
 }
 
 #[test]
@@ -400,8 +451,9 @@ fn restore_reopens_the_panes_herdr_left_as_shells() {
     let file = home.join("a.txt");
     std::fs::write(&file, "A").unwrap();
     f.tab(&[("w1:p2", Some("Explorer")), ("w1:p1", None), ("w1:p5", Some("Preview"))]);
-    // The explorer runs a shell, its program gone; the preview still runs it.
-    f.answer("pane process-info --pane w1:p2", r#"{"process_info":{"foreground_processes":[{"argv":["/bin/bash"]}]}}"#);
+    // The explorer runs a shell, its program gone; the preview still runs it. Both marked as the plugin's.
+    mark(&f, &["w1:p5"]);
+    f.answer("pane process-info --pane w1:p2", SHELL);
     f.answer(
         "pane process-info --pane w1:p5",
         r#"{"process_info":{"foreground_processes":[{"argv":["/p/bin/herdr-explorer","pane","preview"]}]}}"#,
@@ -430,6 +482,18 @@ fn restore_reopens_the_panes_herdr_left_as_shells() {
     assert!(!calls.contains(&"pane close w1:p5".to_string()), "{calls:?}");
     assert!(calls.contains(&open), "{calls:?}");
     assert_eq!(calls.last().map(String::as_str), Some("pane list --workspace w1"), "swept at the end");
+}
+
+#[test]
+fn restore_leaves_a_pane_renamed_with_a_plugin_label() {
+    // A terminal renamed Preview runs a shell, as a restored preview would, but has no state of the plugin's.
+    let f = Fake::new("hook-restore-renamed");
+    f.tab(&[("w1:p1", None), ("w1:p6", Some("Preview"))]);
+    f.answer("pane process-info --pane w1:p6", SHELL);
+    let out = f.run("hook", &["--restore"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
+    let calls = f.calls();
+    assert!(!calls.iter().any(|c| c.starts_with("pane close") || c.starts_with("plugin pane open")), "{calls:?}");
 }
 
 #[test]

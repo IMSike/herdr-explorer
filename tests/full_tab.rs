@@ -196,7 +196,10 @@ fn changes_open_on_the_right_of_the_terminal_in_place_of_the_preview() {
         pane("w1:p2", Some("Explorer"), "w1:t1"),
         pane("w1:p3", None, "w1:t1"),
         pane("w1:p5", Some("Preview"), "w1:t1"),
+        pane("w1:p6", Some("Changes"), "w1:t1"),
     ]);
+    // p6: a terminal the user renamed Changes, which stays.
+    exec::mark_pane("w1:p5");
     assert_eq!(actions::diff(&tmp_file("a.txt"), &tmp(), "w1:p2"), None);
     let args = f.opened().unwrap();
     assert_eq!(option(&args, "--placement").as_deref(), Some("split"));
@@ -433,6 +436,7 @@ impl Ids for Value {
 fn a_tab_of_its_own_is_recorded_named_and_shown_then_handed_back_at_the_exit() {
     let f = Fake::new();
     f.reset(&[pane("w1:p7", Some("Source Control"), "w1:t2"), pane("w1:p8", Some("Preview"), "w1:t2")]);
+    exec::mark_pane("w1:p8");
     // SAFETY: under LOCK.
     unsafe { std::env::set_var("HERDR_PANE_ID", "w1:p7") };
     f.answer("tab get w1:t1", &json::parse(r#"{"tab":{"label":"agent"}}"#).unwrap());

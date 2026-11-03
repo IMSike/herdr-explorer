@@ -76,6 +76,10 @@ pub fn run(args: Vec<OsString>) -> ExitCode {
         Ok(Command::Peek(args)) => done(crate::peek::run(strings(args))),
         Ok(Command::Setup) => done(crate::core::setup::run()),
         Ok(cmd @ Command::Pane(..)) => {
+            // Marked as the plugin's, so that it is told apart from a pane the user gave one of its labels.
+            if let Some(pane) = crate::core::exec::env_var("HERDR_PANE_ID") {
+                crate::core::exec::mark_pane(&pane);
+            }
             // The explorer's and the preview's first process stays as their launcher; the child runs the pane. The
             // other panes are short-lived and run without one.
             let launched = matches!(cmd, Command::Pane("tree" | "preview", _));

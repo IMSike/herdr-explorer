@@ -15,7 +15,7 @@
 //! stops with code 1, without the stack.
 
 use crate::core::actions::{self, Shown};
-use crate::core::exec::{self, OWN_PANES};
+use crate::core::exec::{self, own_label, own_labelled, own_pane};
 use crate::core::{paths, scope, shown, update};
 use crate::json::{self, Value};
 
@@ -51,11 +51,6 @@ fn list(v: &Value, key: &str) -> R<Vec<Value>> {
 
 fn label_is(p: &Value, label: &str) -> bool {
     p.get("label").and_then(Value::as_str) == Some(label)
-}
-
-/// One of the plugin's own panes (OWN_PANES.has(p.label)).
-fn own(p: &Value) -> bool {
-    p.get("label").and_then(Value::as_str).is_some_and(|l| OWN_PANES.contains(&l))
 }
 
 fn workspace_panes(workspace: &str) -> R<Vec<Value>> {
@@ -168,7 +163,7 @@ fn open(panes: &[Value], tab: &Value, root: Option<String>, tree: Option<String>
 /// each split's ratio. The preview moved out of the tab and back beside the terminal (herdr does not move a pane
 /// within its tab), at the same width, leaves the explorer a split of its own, at the side of the tab.
 fn settle_preview(panes: &[Value], tab: &Value, explorer: &str) -> R<()> {
-    let preview = panes.iter().find(|p| label_is(p, "Preview"));
+    let preview = panes.iter().find(|p| own_labelled(p, "Preview"));
     let terminals: Vec<&Value> = panes.iter().filter(|p| !p.get("label").is_some_and(Value::truthy)).collect();
     let (Some(preview), [terminal]) = (preview, terminals.as_slice()) else { return Ok(()) };
     let layout = some(herdr(&["pane", "layout", "--pane", explorer])?.get("layout").cloned())?;
@@ -227,13 +222,14 @@ fn hook(args: &[String]) -> R<()> {
         // The action's tab is the one shown (no tab.focused event after herdr starts).
         shown::set(&json::text(tab));
         let panes = tab_panes(&ws, Some(tab))?;
-        if let Some(explorer) = panes.iter().find(|p| label_is(p, LABEL)) {
+        if let Some(explorer) = panes.iter().find(|p| own_labelled(p, LABEL)) {
             // The preview closes with the explorer (see close in the explorer).
-            for p in panes.iter().filter(|p| label_is(p, "Preview")) {
+            for p in panes.iter().filter(|p| own_labelled(p, "Preview")) {
                 herdr(&["pane", "close", &str_of(p, "pane_id")])?;
             }
             herdr(&["pane", "close", &str_of(explorer, "pane_id")])?;
-        } else if panes.iter().any(|p| !own(p)) {
+        } else if panes.iter().any(|p| !own_label(p)) || panes.iter().any(|p| !own_pane(p)) {
+            // The labels first: a terminal among them spares asking herdr about the others.
             open(&panes, tab, cwd_of(&ctx), None)?;
         }
     } else if has("--search") || has("--scm") {
@@ -285,7 +281,7 @@ fn hook(args: &[String]) -> R<()> {
             let panes = tab_panes(&str_of(tab, "workspace_id"), tab.get("tab_id"))?;
             let root = if ctx.get("workspace_id") == tab.get("workspace_id") { cwd_of(&ctx) } else { None };
             // Not in the editor's tab, opened as a tab of its own.
-            if panes.len() == 1 && !own(&panes[0]) {
+            if panes.len() == 1 && !own_pane(&panes[0]) {
                 open(&panes, tab.get("tab_id").unwrap_or(&Value::Null), root, None)?;
             }
         }
@@ -310,7 +306,7 @@ fn search(ctx: &Value, scm: bool) -> R<()> {
     } else {
         vec![]
     };
-    let explorer = panes.iter().find(|p| label_is(p, LABEL));
+    let explorer = panes.iter().find(|p| own_labelled(p, LABEL));
     let pane = explorer
         .and_then(|e| e.get("pane_id").filter(|p| p.truthy()).cloned())
         .or_else(|| match &from {
@@ -324,7 +320,7 @@ fn search(ctx: &Value, scm: bool) -> R<()> {
     let saved = explorer.map(|e| exec::read_pane_state(&str_of(e, "pane_id"))).unwrap_or(Value::Null);
     // The focused terminal first, else the tab's first one.
     let focused = panes.iter().find(|p| p.get("pane_id") == here.as_ref());
-    let terminal = focused.filter(|f| !own(f)).or_else(|| panes.iter().find(|p| !own(p)));
+    let terminal = focused.filter(|f| !own_pane(f)).or_else(|| panes.iter().find(|p| !own_pane(p)));
     let root = saved
         .get("root")
         .filter(|r| r.truthy())
@@ -349,30 +345,17 @@ fn exists(p: Option<&Value>, dir: bool) -> Option<String> {
     (!p.is_empty() && meta.is_dir() == dir).then(|| p.clone())
 }
 
-/// A pane still running its program, this binary (herdr restored the others as shells).
+/// A pane still running its program, this binary, or node in a pane of a 0.x release still open after the update
+/// (herdr restored the others as shells).
 fn running(p: &Value) -> R<bool> {
-    let info = herdr(&["pane", "process-info", "--pane", &str_of(p, "pane_id")])?;
-    let procs = list(some(info.get("process_info"))?, "foreground_processes")?;
-    Ok(procs.iter().any(|f| {
-        let argv0 = f
-            .get("argv")
-            .filter(|a| a.truthy())
-            .and_then(|a| a.as_array().and_then(|a| a.first()))
-            .filter(|a| a.truthy());
-        let name = match argv0 {
-            None => String::new(),
-            Some(Value::Str(s)) => paths::basename(s, None),
-            Some(_) => return false,
-        };
-        let name = name.to_lowercase();
-        // node: a pane of a 0.x release, still open after the update.
-        ["herdr-explorer", "herdr-explorer.exe", "node", "node.exe"].contains(&name.as_str())
-    }))
+    some(exec::runs_plugin(&herdr(&["pane", "process-info", "--pane", &str_of(p, "pane_id")])?, true))
 }
 
 /// herdr restores the plugin's panes as plain shells, its session keeping only their label and folder: they are
 /// closed, then the explorer and the preview reopened in the tabs that had them, at what they saved under the same
-/// pane id (the preview's file only when it still exists).
+/// pane id (the preview's file only when it still exists). Only the panes the plugin marked (exec::mark_pane) close:
+/// unlike the JS of 0.8.0, which closed every pane of its labels not running it, a terminal the user renamed Preview
+/// stays.
 fn restore() -> R<()> {
     for ws in workspaces()? {
         let mut tabs: Vec<(Value, Vec<Value>)> = Vec::new();
@@ -387,7 +370,8 @@ fn restore() -> R<()> {
             let mut stale = Vec::new();
             let mut rest = Vec::new();
             for p in panes {
-                if own(&p) && !running(&p)? { stale.push(p) } else { rest.push(p) }
+                let marked = own_label(&p) && exec::pane_marked(&str_of(&p, "pane_id"));
+                if marked && !running(&p)? { stale.push(p) } else { rest.push(p) }
             }
             if stale.is_empty() {
                 continue;

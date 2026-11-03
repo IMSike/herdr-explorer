@@ -1105,6 +1105,67 @@ pub fn write_pane_state(pane: &str, data: &Value) {
     }
 }
 
+/// Marks a pane the plugin started as its own: its state file, written `{}` when the pane starts without one (the
+/// explorer and the preview write theirs over it). herdr keeps the pane ids across its restarts and never gives a
+/// closed one again, so the mark stays with the pane, and sweep_state removes it once the pane is gone.
+pub fn mark_pane(pane: &str) {
+    if let Some(f) = pane_file(pane).filter(|f| !std::path::Path::new(f).exists()) {
+        write_atomic(&f, "{}");
+    }
+}
+
+/// The pane has the plugin's state file (mark_pane).
+pub fn pane_marked(pane: &str) -> bool {
+    pane_file(pane).is_some_and(|f| std::path::Path::new(&f).exists())
+}
+
+/// Whether a pane's foreground processes (herdr's process-info) include this binary, or node with node (the program of
+/// the panes of a 0.x release); None when the answer lacks them.
+pub fn runs_plugin(info: &Value, node: bool) -> Option<bool> {
+    let procs = info.get("process_info")?.get("foreground_processes")?.as_array()?;
+    Some(procs.iter().any(|f| {
+        let argv0 = f
+            .get("argv")
+            .filter(|a| a.truthy())
+            .and_then(|a| a.as_array().and_then(|a| a.first()))
+            .filter(|a| a.truthy());
+        let name = match argv0 {
+            None => String::new(),
+            Some(Value::Str(s)) => paths::basename(s, None),
+            Some(_) => return false,
+        };
+        let name = name.to_lowercase();
+        ["herdr-explorer", "herdr-explorer.exe"].contains(&name.as_str())
+            || node && ["node", "node.exe"].contains(&name.as_str())
+    }))
+}
+
+/// One of the plugin's labels (OWN_PANES.has(p.label)), which the user can also give any pane (own_pane tells).
+pub fn own_label(p: &Value) -> bool {
+    p.get("label").and_then(Value::as_str).is_some_and(|l| OWN_PANES.contains(&l))
+}
+
+/// One of the plugin's own panes. The label comes first, as it costs nothing, but the pane must also be marked
+/// (mark_pane), else run this binary (a pane started before it was marked, or without a state folder); node does not
+/// count here, as the agents installed with npm run it. When unsure, it is not the plugin's: a pane is never closed or
+/// taken for the plugin's on its label alone. Unlike the JS of 0.8.0, which went by the label: a terminal or an agent
+/// renamed Preview closed with the explorer.
+pub fn own_pane(p: &Value) -> bool {
+    if !own_label(p) {
+        return false;
+    }
+    let Some(id) = p.get("pane_id").and_then(Value::as_str) else { return false };
+    pane_marked(id) || {
+        let info = result(run(herdr(), &["pane", "process-info", "--pane", id], &herdr_opts()).as_deref());
+        runs_plugin(&info, false) == Some(true)
+    }
+}
+
+/// own_pane, with that label.
+pub fn own_labelled(p: &Value, label: &str) -> bool {
+    p.get("label").and_then(Value::as_str) == Some(label) && own_pane(p)
+}
+
 /// What a tab keeps in the state folder, one file per tab and kind: <kind>-<tab id>.json. The kinds: the review notes
 /// (notes), the preview's requests (actions), the diff scope and the agent's last turn (scope), the files viewed
 /// (viewed), the panes of the tabs of their own (edit, review, search: actions::hold_tab).

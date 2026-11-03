@@ -11,7 +11,7 @@
 //! there is none. Prints what it showed, or why not, with exit code 1 (2: wrong use).
 
 use crate::core::actions::{self, Shown};
-use crate::core::exec::{self, OWN_PANES, Opts};
+use crate::core::exec::{self, Opts, own_label};
 use crate::core::places::{self, Mark};
 use crate::core::{icons, paths};
 use crate::json::{self, Value};
@@ -80,7 +80,6 @@ fn origin() -> (Option<String>, String) {
     let mut cwd = paths::cwd();
     if let Some(text) = exec::env_var("HERDR_PLUGIN_CONTEXT_JSON") {
         let ctx = json::parse(&text).unwrap_or(Value::Obj(Vec::new()));
-        let own = |p: &Value| p.get("label").and_then(Value::as_str).is_some_and(|l| OWN_PANES.contains(&l));
         // An answer without its panes counts as none.
         let list = match ctx.get("workspace_id").filter(|w| w.truthy()) {
             Some(ws) => herdr(&["pane", "list", "--workspace", &json::text(ws)]),
@@ -89,7 +88,7 @@ fn origin() -> (Option<String>, String) {
         let all = list.get("panes").and_then(Value::as_array).cloned().unwrap_or_default();
         let panes: Vec<Value> = all.into_iter().filter(|p| p.get("tab_id") == ctx.get("tab_id")).collect();
         let focused = panes.iter().find(|p| p.get("pane_id") == ctx.get("focused_pane_id"));
-        let terminal = focused.filter(|f| !own(f)).or_else(|| panes.iter().find(|p| !own(p)));
+        let terminal = focused.filter(|f| !own_label(f)).or_else(|| panes.iter().find(|p| !own_label(p)));
         pane = match terminal {
             Some(t) => t.get("pane_id").cloned(),
             None => ctx.get("focused_pane_id").cloned(),

@@ -59,8 +59,10 @@ The binary was ported from the plugin's JavaScript (0.8.0 and earlier): its stat
 messages are the same, which the tests check against fixtures recorded from it ([CONTRIBUTING.md](../CONTRIBUTING.md#tests)).
 
 The binary talks to herdr through its CLI (`herdr pane …`, `herdr plugin pane open …`), whose JSON
-answers it parses, and recognise the plugin's panes by their label (Explorer, Preview, Search, Source Control,
-Changes, Editor). [CONTRIBUTING.md](../CONTRIBUTING.md#project-structure) gives the role of each source file, and
+answers it parses. It recognises the plugin's panes by their label (Explorer, Preview, Search, Source Control,
+Changes, Editor), which the user can also give any pane: before closing one, or counting it as the plugin's, it checks
+the state file each pane writes when it starts (`panes/<pane id>.json`), else its foreground process
+(`exec::own_pane`). [CONTRIBUTING.md](../CONTRIBUTING.md#project-structure) gives the role of each source file, and
 [SECURITY.md](../SECURITY.md) how git and the other programs are run.
 
 ## Placement
@@ -215,16 +217,17 @@ terminal when the focus is on one of the plugin's panes. Its argument's places (
 ## Restore after a herdr restart
 
 herdr restores plugin panes as plain shells, keeping only their label and folder. To recover what
-they showed, each pane writes its state to `panes/<pane id>.json`:
+they showed, each pane writes its state to `panes/<pane id>.json`, `{}` at its start for the panes that keep
+nothing, which marks it as the plugin's:
 
 - the explorer: the tab folder (`home`) and the current tree root (`root`);
 - the preview: `file`, `root` and `line`, and its tabs (`tabs`: `{ list, current }`, each tab's file, kept flag,
   scroll and view).
 
-At startup, `hook --restore` closes, in every workspace, the panes labelled as the plugin's whose foreground
-process is neither `herdr-explorer` nor, in a pane opened by a manifest of 0.8.0 or earlier, `node`. In
-each tab that had an explorer, it opens a new one, at the saved root when both saved
-folders still exist; in each tab that had a preview, it reopens the saved tabs whose file still exists, on the
+At startup, `hook --restore` closes, in every workspace, the panes labelled and marked as the plugin's whose
+foreground process is neither `herdr-explorer` nor, in a pane opened by a manifest of 0.8.0 or earlier, `node`; a
+pane the user gave one of those labels has no state file and stays. In each tab that had an explorer, it opens a
+new one, at the saved root when both saved folders still exist; in each tab that had a preview, it reopens the saved tabs whose file still exists, on the
 current one. The other plugin panes are not reopened. It then deletes the state files of tabs and panes that no longer exist, as `--closed` does on the
 `tab.closed` and `workspace.closed` events.
 herdr keeps pane ids across a restart, which is what lets each pane find its saved state.
