@@ -108,7 +108,16 @@ try {
         if ($parts.Count -ge 2 -and ($parts[1] -ceq $asset -or $parts[1] -ceq "*$asset")) { $want = $parts[0]; break }
     }
     if ($want -cnotmatch '^[0-9a-f]{64}$') { Fail "$asset is not in SHA256SUMS" }
-    $got = (Get-FileHash -Algorithm SHA256 -LiteralPath $tmp).Hash.ToLowerInvariant()
+    # .NET, not Get-FileHash: Windows PowerShell 5.1 loses it when it inherits PowerShell 7's PSModulePath, as when
+    # herdr was started from PowerShell 7. The hasher first, so that nothing can fail between opening and the try.
+    $sha = [Security.Cryptography.SHA256]::Create()
+    $stream = [IO.File]::OpenRead($tmp)
+    try {
+        $got = [BitConverter]::ToString($sha.ComputeHash($stream)).Replace('-', '').ToLowerInvariant()
+    } finally {
+        $sha.Dispose()
+        $stream.Dispose()
+    }
     if ($got -ne $want) { Fail "$asset does not match its SHA256SUMS: not installed" }
 
     # The binary replaced by renames: the old one first set aside, which Windows allows while it runs (the binary
